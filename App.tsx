@@ -81,11 +81,12 @@ export default function App() {
     window.addEventListener("beforeunload", handleBeforeUnload);
 
     // Heartbeat to keep lastSeen fresh while using app
+    // FIX: Increased frequency to 30 seconds (was 60s) for more accurate "Online" detection
     const heartbeat = setInterval(() => {
         if (document.visibilityState === 'visible') {
             updateDoc(userRef, { lastSeen: Date.now() });
         }
-    }, 60000); // Every minute
+    }, 30000); 
 
     return () => {
         document.removeEventListener("visibilitychange", handleVisibilityChange);
@@ -158,27 +159,4 @@ export default function App() {
           <div className="h-20 bg-slate-800/90 backdrop-blur-lg border-t border-slate-700/50 flex justify-around items-center px-6 pb-2 absolute bottom-0 w-full z-10">
             <button 
                 onClick={() => setView('chats')}
-                className={`flex flex-col items-center gap-1 transition-colors ${view === 'chats' ? 'text-blue-500' : 'text-slate-500 hover:text-slate-300'}`}
-            >
-                <div className={`p-2 rounded-xl ${view === 'chats' ? 'bg-blue-500/10' : ''}`}>
-                    <MessageSquare className="w-6 h-6" />
-                </div>
-                <span className="text-[10px] font-medium">Chats</span>
-            </button>
-            
-            <button 
-                onClick={() => setView('settings')}
-                className={`flex flex-col items-center gap-1 transition-colors ${view === 'settings' ? 'text-blue-500' : 'text-slate-500 hover:text-slate-300'}`}
-            >
-                <div className={`p-2 rounded-xl ${view === 'settings' ? 'bg-blue-500/10' : ''}`}>
-                    <SettingsIcon className="w-6 h-6" />
-                </div>
-                <span className="text-[10px] font-medium">Settings</span>
-            </button>
-          </div>
-        )}
-
-      </div>
-    </div>
-  );
-}
+                className={`flex flex-col items-center gap-1 transition-colors ${view === 'chats'

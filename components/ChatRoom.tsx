@@ -8,7 +8,7 @@ import { Send, ArrowLeft, Info, X, Clock, Calendar } from 'lucide-react';
 
 interface ChatRoomProps {
   currentUser: UserProfile;
-  initialOtherUser: UserProfile; // Renamed to initial because we listen to updates
+  initialOtherUser: UserProfile; 
   chatId: string;
   onBack: () => void;
 }
@@ -21,10 +21,19 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, initialOtherUse
   // Real-time user data for status
   const [otherUser, setOtherUser] = useState<UserProfile>(initialOtherUser);
   const [showProfileInfo, setShowProfileInfo] = useState(false);
+  
+  // Local time state to force re-evaluation of "Online" status even if DB doesn't update
+  const [now, setNow] = useState(Date.now());
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // 1. Listen for real-time updates to the OTHER USER'S profile (for status)
+  // 1. Update local "now" every 30 seconds to catch stale online users in real-time
+  useEffect(() => {
+    const interval = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // 2. Listen for real-time updates to the OTHER USER'S profile
   useEffect(() => {
     const userRef = doc(db, 'users', initialOtherUser.uid);
     const unsubscribe = onSnapshot(userRef, (docSnap) => {
@@ -35,7 +44,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, initialOtherUse
     return () => unsubscribe();
   }, [initialOtherUser.uid]);
 
-  // 2. Listen for messages
+  // 3. Listen for messages
   useEffect(() => {
     const messagesRef = collection(db, 'messages');
     const q = query(
@@ -87,17 +96,28 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, initialOtherUse
     }
   };
 
+  // SMART STATUS CHECK
+  // Even if database says "isOnline: true", we check if the heartbeat (lastSeen) is fresh.
+  // If lastSeen is older than 2 minutes (120000ms), we consider them offline.
+  const isUserReallyOnline = (user: UserProfile) => {
+    if (!user.isOnline) return false;
+    if (!user.lastSeen) return false;
+    return (now - user.lastSeen) < 120000; 
+  };
+
+  const isOnline = isUserReallyOnline(otherUser);
+
   // Status Formatter
   const getStatusText = (user: UserProfile) => {
-    if (user.isOnline) return "Online";
+    if (isOnline) return "Online";
     if (!user.lastSeen) return "Offline";
 
-    const diff = Date.now() - user.lastSeen;
+    const diff = now - user.lastSeen;
     const minutes = Math.floor(diff / 60000);
     const hours = Math.floor(minutes / 60);
     const days = Math.floor(hours / 24);
 
-    if (minutes < 1) return "был(а) только что";
+    if (minutes < 2) return "был(а) только что"; // Covers the gap between online and 2 mins
     if (minutes < 60) return `был(а) ${minutes} мин. назад`;
     if (hours < 24) {
         const timeStr = new Date(user.lastSeen).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
@@ -129,14 +149,14 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, initialOtherUse
                 alt={otherUser.username}
                 className="w-10 h-10 rounded-full bg-slate-700 object-cover border border-slate-600"
               />
-              {/* Online Indicator Dot */}
-              {otherUser.isOnline && (
+              {/* Online Indicator Dot - Uses SMART check */}
+              {isOnline && (
                  <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-slate-800 rounded-full"></div>
               )}
             </div>
             <div className="min-w-0">
               <h3 className="font-semibold text-white leading-tight truncate">{otherUser.displayName}</h3>
-              <p className={`text-xs truncate ${otherUser.isOnline ? 'text-blue-400 font-medium' : 'text-slate-400'}`}>
+              <p className={`text-xs truncate ${isOnline ? 'text-blue-400 font-medium' : 'text-slate-400'}`}>
                 {getStatusText(otherUser)}
               </p>
             </div>
@@ -265,7 +285,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, initialOtherUse
                         
                         <div className="mb-6">
                             <h2 className="text-2xl font-bold text-white">{otherUser.displayName}</h2>
-                            <p className={`text-sm font-medium mt-1 ${otherUser.isOnline ? 'text-blue-400' : 'text-slate-400'}`}>
+                            <p className={`text-sm font-medium mt-1 ${isOnline ? 'text-blue-400' : 'text-slate-400'}`}>
                                 {getStatusText(otherUser)}
                             </p>
                         </div>
@@ -281,7 +301,6 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, initialOtherUse
                                 </div>
                             </div>
                             
-                            {/* Example of extra details */}
                             <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-700/50 flex items-center gap-4">
                                 <div className="p-2 bg-purple-500/10 rounded-lg">
                                     <Calendar className="w-5 h-5 text-purple-500" />
