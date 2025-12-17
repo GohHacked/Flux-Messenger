@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { auth, db } from './firebase';
 import { onAuthStateChanged } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { Auth } from './components/Auth';
 import { ChatList } from './components/ChatList';
 import { ChatRoom } from './components/ChatRoom';
@@ -28,7 +28,7 @@ export default function App() {
         if (docSnap.exists()) {
           setUserProfile(docSnap.data() as UserProfile);
         } else {
-            // Fallback if firestore record missing (rare race condition handled in Auth.tsx usually)
+            // Fallback if firestore record missing
             console.error("Firestore profile not found");
         }
       } else {
@@ -40,12 +40,65 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // Sync profile updates if settings change
+  // Presence System Logic
+  useEffect(() => {
+    if (!user) return;
+
+    const userRef = doc(db, 'users', user.uid);
+
+    const setOnline = () => {
+        updateDoc(userRef, {
+            isOnline: true,
+            lastSeen: Date.now()
+        }).catch(e => console.error("Error setting online", e));
+    };
+
+    const setOffline = () => {
+        updateDoc(userRef, {
+            isOnline: false,
+            lastSeen: Date.now()
+        }).catch(e => console.error("Error setting offline", e));
+    };
+
+    // Set online immediately on mount
+    setOnline();
+
+    // Handle visibility change (tab switch/minimize on mobile)
+    const handleVisibilityChange = () => {
+        if (document.visibilityState === 'visible') {
+            setOnline();
+        } else {
+            setOffline();
+        }
+    };
+
+    // Handle window close
+    const handleBeforeUnload = () => {
+        setOffline();
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("beforeunload", handleBeforeUnload);
+
+    // Heartbeat to keep lastSeen fresh while using app
+    const heartbeat = setInterval(() => {
+        if (document.visibilityState === 'visible') {
+            updateDoc(userRef, { lastSeen: Date.now() });
+        }
+    }, 60000); // Every minute
+
+    return () => {
+        document.removeEventListener("visibilitychange", handleVisibilityChange);
+        window.removeEventListener("beforeunload", handleBeforeUnload);
+        clearInterval(heartbeat);
+        setOffline(); // Try to set offline on unmount
+    };
+  }, [user]);
+
+  // Sync profile updates locally if settings change
   useEffect(() => {
     if(!user) return;
     const docRef = doc(db, 'users', user.uid);
-    // Simple poll or rely on sub-component update. 
-    // In a real app, listen to own profile with onSnapshot.
     getDoc(docRef).then(s => {
         if(s.exists()) setUserProfile(s.data() as UserProfile);
     });
@@ -90,7 +143,7 @@ export default function App() {
           {view === 'active_chat' && activeChat && (
               <ChatRoom 
                 currentUser={userProfile}
-                otherUser={activeChat.otherUser}
+                initialOtherUser={activeChat.otherUser}
                 chatId={activeChat.chatId}
                 onBack={() => {
                     setView('chats');

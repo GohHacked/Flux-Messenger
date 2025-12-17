@@ -1,32 +1,43 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { UserProfile, Message } from '../types';
 import { db } from '../firebase';
-import { collection, query, where, onSnapshot, limit } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, limit, doc } from 'firebase/firestore';
 import { sendMessage } from '../services/chatService';
-import { motion } from 'framer-motion';
-import { Send, ArrowLeft } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Send, ArrowLeft, Info, X, Clock, Calendar } from 'lucide-react';
 
 interface ChatRoomProps {
   currentUser: UserProfile;
-  otherUser: UserProfile;
+  initialOtherUser: UserProfile; // Renamed to initial because we listen to updates
   chatId: string;
   onBack: () => void;
 }
 
-export const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, otherUser, chatId, onBack }) => {
+export const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, initialOtherUser, chatId, onBack }) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
   const [isSending, setIsSending] = useState(false);
+  
+  // Real-time user data for status
+  const [otherUser, setOtherUser] = useState<UserProfile>(initialOtherUser);
+  const [showProfileInfo, setShowProfileInfo] = useState(false);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  // 1. Listen for real-time updates to the OTHER USER'S profile (for status)
   useEffect(() => {
-    // Subscribe to messages for this chat
+    const userRef = doc(db, 'users', initialOtherUser.uid);
+    const unsubscribe = onSnapshot(userRef, (docSnap) => {
+        if (docSnap.exists()) {
+            setOtherUser(docSnap.data() as UserProfile);
+        }
+    });
+    return () => unsubscribe();
+  }, [initialOtherUser.uid]);
+
+  // 2. Listen for messages
+  useEffect(() => {
     const messagesRef = collection(db, 'messages');
-    
-    // CRITICAL FIX: We removed 'orderBy' from the Firestore query.
-    // Firestore requires a specific composite index for WHERE + ORDER BY.
-    // By removing it, we ensure the app works immediately without console configuration.
-    // We will sort the messages in the JavaScript code below instead.
     const q = query(
       messagesRef,
       where('chatId', '==', chatId),
@@ -38,36 +49,32 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, otherUser, chat
         id: doc.id,
         ...doc.data()
       })) as Message[];
-
-      // Client-side sorting (Reliable fix for "messages not showing")
       msgs.sort((a, b) => a.createdAt - b.createdAt);
-      
       setMessages(msgs);
     });
 
     return () => unsubscribe();
   }, [chatId]);
 
-  // Auto-scroll to bottom when messages change
+  // Auto-scroll
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
   const handleSend = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    
     if (!inputText.trim() || isSending) return;
     
     const text = inputText;
-    setInputText(''); // Clear input immediately for better UX
+    setInputText(''); 
     setIsSending(true);
     
     try {
       await sendMessage(chatId, text, currentUser);
     } catch (err) {
       console.error("Failed to send", err);
-      setInputText(text); // Restore text if failed
-      alert("Failed to send message. Check your connection.");
+      setInputText(text);
+      alert("Failed to send message.");
     } finally {
       setIsSending(false);
     }
@@ -80,30 +87,61 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, otherUser, chat
     }
   };
 
+  // Status Formatter
+  const getStatusText = (user: UserProfile) => {
+    if (user.isOnline) return "Online";
+    if (!user.lastSeen) return "Offline";
+
+    const diff = Date.now() - user.lastSeen;
+    const minutes = Math.floor(diff / 60000);
+    const hours = Math.floor(minutes / 60);
+    const days = Math.floor(hours / 24);
+
+    if (minutes < 1) return "был(а) только что";
+    if (minutes < 60) return `был(а) ${minutes} мин. назад`;
+    if (hours < 24) {
+        const timeStr = new Date(user.lastSeen).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+        return `был(а) сегодня в ${timeStr}`;
+    }
+    if (days < 2) return "был(а) вчера";
+    
+    return `был(а) ${new Date(user.lastSeen).toLocaleDateString()}`;
+  };
+
   return (
     <div className="flex flex-col h-full bg-slate-900 absolute inset-0 z-20">
+      
       {/* Header */}
       <div className="flex items-center justify-between p-4 bg-slate-800/80 backdrop-blur-md border-b border-slate-700/50 shadow-sm z-10">
-        <div className="flex items-center gap-3">
-          <button onClick={onBack} className="p-2 hover:bg-slate-700 rounded-full transition-colors text-slate-300">
+        <div className="flex items-center gap-3 overflow-hidden">
+          <button onClick={onBack} className="p-2 hover:bg-slate-700 rounded-full transition-colors text-slate-300 flex-shrink-0">
             <ArrowLeft className="w-6 h-6" />
           </button>
-          <div className="relative">
-            <img 
-              src={otherUser.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${otherUser.username}`} 
-              alt={otherUser.username}
-              className="w-10 h-10 rounded-full bg-slate-700 object-cover border border-slate-600"
-            />
-            {/* Online indicator (Visual only for now) */}
-            <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-slate-800 rounded-full"></div>
-          </div>
-          <div>
-            <h3 className="font-semibold text-white leading-tight">{otherUser.displayName}</h3>
-            <p className="text-xs text-slate-400">{otherUser.username}</p>
+          
+          {/* Clickable Header for Profile Info */}
+          <div 
+            className="flex items-center gap-3 cursor-pointer group flex-1 min-w-0"
+            onClick={() => setShowProfileInfo(true)}
+          >
+            <div className="relative flex-shrink-0">
+              <img 
+                src={otherUser.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${otherUser.username}`} 
+                alt={otherUser.username}
+                className="w-10 h-10 rounded-full bg-slate-700 object-cover border border-slate-600"
+              />
+              {/* Online Indicator Dot */}
+              {otherUser.isOnline && (
+                 <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-slate-800 rounded-full"></div>
+              )}
+            </div>
+            <div className="min-w-0">
+              <h3 className="font-semibold text-white leading-tight truncate">{otherUser.displayName}</h3>
+              <p className={`text-xs truncate ${otherUser.isOnline ? 'text-blue-400 font-medium' : 'text-slate-400'}`}>
+                {getStatusText(otherUser)}
+              </p>
+            </div>
           </div>
         </div>
-        
-        {/* Call buttons removed as requested */}
       </div>
 
       {/* Messages Area */}
@@ -121,7 +159,6 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, otherUser, chat
         {messages.map((msg, index) => {
           const isMe = msg.senderId === currentUser.uid;
           const showAvatar = !isMe && (index === 0 || messages[index - 1].senderId !== msg.senderId);
-          // Add spacing if the previous message was from a different user
           const addMarginTop = index > 0 && messages[index - 1].senderId !== msg.senderId;
 
           return (
@@ -192,6 +229,77 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, otherUser, chat
             </button>
         </form>
       </div>
+
+      {/* Profile Details Modal Overlay */}
+      <AnimatePresence>
+        {showProfileInfo && (
+            <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="absolute inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center"
+                onClick={() => setShowProfileInfo(false)}
+            >
+                <motion.div 
+                    initial={{ y: "100%" }}
+                    animate={{ y: 0 }}
+                    exit={{ y: "100%" }}
+                    transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+                    onClick={(e) => e.stopPropagation()}
+                    className="w-full sm:w-[90%] sm:max-w-sm bg-slate-800 rounded-t-3xl sm:rounded-2xl border-t sm:border border-slate-700 shadow-2xl overflow-hidden"
+                >
+                    <div className="relative h-32 bg-gradient-to-br from-blue-600 to-purple-700">
+                        <button 
+                            onClick={() => setShowProfileInfo(false)}
+                            className="absolute top-4 right-4 p-2 bg-black/20 hover:bg-black/40 rounded-full text-white backdrop-blur-md transition-colors"
+                        >
+                            <X className="w-5 h-5" />
+                        </button>
+                    </div>
+                    
+                    <div className="px-6 pb-8 -mt-12 relative">
+                        <img 
+                             src={otherUser.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${otherUser.username}`} 
+                             className="w-24 h-24 rounded-full border-4 border-slate-800 bg-slate-800 shadow-lg object-cover mb-4"
+                        />
+                        
+                        <div className="mb-6">
+                            <h2 className="text-2xl font-bold text-white">{otherUser.displayName}</h2>
+                            <p className={`text-sm font-medium mt-1 ${otherUser.isOnline ? 'text-blue-400' : 'text-slate-400'}`}>
+                                {getStatusText(otherUser)}
+                            </p>
+                        </div>
+
+                        <div className="space-y-4">
+                            <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-700/50 flex items-center gap-4">
+                                <div className="p-2 bg-blue-500/10 rounded-lg">
+                                    <Info className="w-5 h-5 text-blue-500" />
+                                </div>
+                                <div>
+                                    <p className="text-xs text-slate-500 uppercase tracking-wider">Username</p>
+                                    <p className="text-white font-medium text-lg">{otherUser.username}</p>
+                                </div>
+                            </div>
+                            
+                            {/* Example of extra details */}
+                            <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-700/50 flex items-center gap-4">
+                                <div className="p-2 bg-purple-500/10 rounded-lg">
+                                    <Calendar className="w-5 h-5 text-purple-500" />
+                                </div>
+                                <div>
+                                    <p className="text-xs text-slate-500 uppercase tracking-wider">Joined</p>
+                                    <p className="text-slate-300">
+                                        {new Date(otherUser.createdAt).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </motion.div>
+            </motion.div>
+        )}
+      </AnimatePresence>
+
     </div>
   );
 };

@@ -5,6 +5,8 @@ export interface UserProfile {
   displayName: string;
   photoURL?: string;
   createdAt: number;
+  isOnline?: boolean;
+  lastSeen?: number;
 }
 
 export interface Message {
